@@ -1,0 +1,24 @@
+#+TITLE: Gödel
+
+A completely experimental, totally undecidable, annotation-free typechecker for
+*idiomatic* Clojure
+
+* Goals
+
+- Type-check clojure code as it exists in the wild, with no changes or
+  alterations
+- Provide live, quick feedback during development and refactoring, over
+  providing extensive safety in CI
+- Embrace existing clojure idioms for safety (~spec~, ~assert~, ~prepost-map~,
+  maybe even tests?) as means of getting additional typing information
+- Provide best-in-class error messages that tell you exactly what's wrong, why
+  we think it's wrong, and how to fix it.
+
+* Non-goals
+
+- Total correctness (undecidable for idiomatic code without requiring extensive
+  annotations, which would make the code un-idiomatic)
+- Replacing tests (idiomatic Clojure uses tests for *safety*, whereas Gödel is
+  intended to speed up development)
+- Good enough to run in CI (this may happen eventually, but being good enough to
+  be used as a Flycheck / Syntastic checker during takes strong precedence)
