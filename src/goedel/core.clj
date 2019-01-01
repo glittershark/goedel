@@ -178,22 +178,50 @@
 
   (declare type-infer*)
 
-  (defn ti-method-invoke [obj m arg-ts]
-    (cond
-      (class? obj)
-      (do
-        (-> obj
-          (.getMethod (name m)
-                      (into-array Class (map p/as-java-class arg-ts)))
-          .getReturnType
-          t/class->type
-          m-result))
-      (class-symbol? obj)
-      (recur (resolve obj) m arg-ts)
-      (= ::t/class (::t/type obj))
-      (recur (-> obj ::t/type-args first) m arg-ts)
-      :else
-      (recur (class obj) m arg-ts)))
+  (defn ti-method-invoke [obj m args]
+    (domonad
+      [obj-t (type-infer* obj)
+       arg-ts (m-map type-infer* args)
+       r
+       (letfn
+           [(go
+              [obj-t m arg-ts]
+              (if-let [existentials (->> arg-ts
+                                         (cons obj-t)
+                                         (filter t/existential?)
+                                         seq)]
+                (m-result
+                 (t/dependent
+                  existentials
+                  (fn [existential-type-map]
+                    (let [obj-t* (if (t/existential? obj-t)
+                                   (get existential-type-map obj)
+                                   obj-t)
+                          arg-ts* (replace existential-type-map arg-ts)]
+                      ;; this'll be fun
+                      ;; hope it halts!
+                      (go obj-t* m arg-ts*)))) )
+                (loop [obj-t obj-t]
+                  (cond
+                    (class? obj-t)
+                    (do
+                      (-> obj-t
+                          (.getMethod
+                           (name m)
+                           (into-array Class (map p/as-java-class arg-ts)))
+                          .getReturnType
+                          t/class->type
+                          m-result))
+                    (class-symbol? obj-t)
+                    (recur (resolve obj-t))
+                    (= ::t/class (::t/type obj-t))
+                    (recur (-> obj-t ::t/type-args first))
+                    (nil? obj-t)
+                    (throw (NullPointerException.))
+                    :else
+                    (recur (class obj-t))))))]
+           (go obj-t m arg-ts))]
+      r))
 
   (defn ti-special-form [expr]
     (match [expr]
@@ -224,8 +252,12 @@
         t/var)
 
       [([(:or 'clojure.core/fn 'fn `fn*) & args] :seq)]
-      ;; TODO just assuming (fn ([x] body)) here
-      (let [[[vars & body]] args]
+      ;; TODO handle multiple arities
+      (let [[[vars & body]] (if ((some-fn list?
+                                          #(instance? clojure.lang.Cons %))
+                                 (first args))
+                              args
+                              [args])]
         (domonad
           [arg-vars (m-map (fn [v]
                              (domonad
@@ -241,24 +273,7 @@
            (t/-> (t/types* arg-tys) res))))
 
       [([`. obj ([m & args] :seq)] :seq)]
-      (domonad
-        [obj-t (type-infer* obj)
-         arg-ts (m-map type-infer* args)
-         r (if-let [existentials (->> arg-ts
-                                      (cons obj-t)
-                                      (filter t/existential?)
-                                      seq)]
-             (m-result
-              (t/dependent
-               existentials
-               (fn [existential-type-map]
-                 (let [obj-t* (if (t/existential? obj-t)
-                                (get existential-type-map obj)
-                                obj-t)
-                       arg-ts* (replace existential-type-map arg-ts)]
-                   (ti-method-invoke obj-t* m arg-ts*)))) )
-             (ti-method-invoke obj m arg-ts))]
-        r)))
+      (ti-method-invoke obj m args)))
 
 
   (defn instantiate-dependent [{::t/keys [dependent-args dependent-fn]} vs]
@@ -349,4 +364,8 @@
 
   (type-infer
    (nth (source `inc) 2))
+
+  (type-infer
+   '((clojure.core/fn [x__46809__auto__] (clojure.core/inc x__46809__auto__))
+     1.0))
   )

@@ -18,6 +18,23 @@
     t/boolean
     t/float]))
 
+(defn eta-abstract
+  [[f & args]]
+  {:post [(= (eval (cons f args))
+             (eval %))]}
+  (let [λ-args (map #(gensym (str "a" %)) (range (count args)))]
+    `((fn [~@λ-args] (~f ~@λ-args)) ~@args)))
+
+(comment
+  (sut/type-infer
+   (macroexpand (eta-abstract (eta-abstract `(inc 1)))))
+
+  (sut/type-infer
+   (macroexpand
+    `(fn [x#]
+       [1 2 3 x#])))
+  )
+
 (defn exprs-with-types
   "Generator for a two-tuple of an expression and its type,
    ∀ {T : Type} → (a : T) × T"
@@ -99,4 +116,10 @@
   (testing "stdlib function calls"
     (are-types
      `(inc 1) t/integer
-     `(inc 1.0) t/float)))
+     `(inc 1.0) t/float)
+
+    (checking "eta-abstracted" 10 [eta-times gen/pos-int]
+      (let [abstract-n-times (apply comp (repeat eta-times eta-abstract))]
+        (are-types
+         (abstract-n-times `(inc 1)) t/integer
+         (abstract-n-times `(inc 1.0)) t/float)))))
