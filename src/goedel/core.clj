@@ -31,6 +31,7 @@
     'def
     `fn
     `fn*
+    `if
     '.})
 
 (defn- invocation? [expr]
@@ -128,6 +129,7 @@
     r))
 
 ;;;
+;;;map
 
 (defn source [f]
   (-> f
@@ -273,7 +275,14 @@
            (t/-> (t/types* arg-tys) res))))
 
       [([`. obj ([m & args] :seq)] :seq)]
-      (ti-method-invoke obj m args)))
+      (ti-method-invoke obj m args)
+
+      [([`if _cond then else] :seq)]
+      (domonad
+        [then-t (type-infer* then)
+         else-t (type-infer* else)
+         r (<unify then-t else-t)]
+        r)))
 
 
   (defn instantiate-dependent [{::t/keys [dependent-args dependent-fn]} vs]

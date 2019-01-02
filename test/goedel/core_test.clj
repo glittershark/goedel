@@ -25,16 +25,6 @@
   (let [λ-args (map #(gensym (str "a" %)) (range (count args)))]
     `((fn [~@λ-args] (~f ~@λ-args)) ~@args)))
 
-(comment
-  (sut/type-infer
-   (macroexpand (eta-abstract (eta-abstract `(inc 1)))))
-
-  (sut/type-infer
-   (macroexpand
-    `(fn [x#]
-       [1 2 3 x#])))
-  )
-
 (defn exprs-with-types
   "Generator for a two-tuple of an expression and its type,
    ∀ {T : Type} → (a : T) × T"
@@ -45,8 +35,7 @@
         t/integer gen/int
         t/string gen/string
         t/boolean gen/boolean
-        t/float gen/double)
-    ]
+        t/float gen/double)]
    [x t]))
 
 ;;;
@@ -99,6 +88,13 @@
       (is (= t/var (sut/type-infer (macroexpand `(def ~'x ~x)))))
       (is (= t (sut/type-infer (macroexpand `(do (def x# ~x)
                                                  x#))))))
+
+    (testing "if"
+      (testing "simple cases"
+        (are-types
+         `(if true 1 2) t/integer
+         `(if false 1 2) t/integer
+         `(fn [x#] (if true 1 x#)) (t/-> (t/tuple t/integer) t/integer))))
 
     (testing "java interop"
       (are-types
