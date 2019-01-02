@@ -129,9 +129,15 @@
 (defmacro ∀ [tvs typ]
   `(forall ~tvs ~typ))
 
-(comment
-  (universalize (existential 1))
-  )
+(defmacro exists [tvs typ]
+  `(let [~@(->> tvs
+                (map-indexed vector)
+                (mapcat (fn [[idx vname]]
+                          [vname `(universal ~idx)])))]
+     ~typ))
+
+(defmacro ∃ [tvs typ]
+  `(exists ~tvs ~typ))
 
 (defn alpha= [t1 t2]
   (or
