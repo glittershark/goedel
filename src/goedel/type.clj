@@ -4,7 +4,8 @@
             [clojure.spec.alpha :as s]
             [clojure.walk :as walk]
             [goedel.protocols :as p]
-            [clojure.set :as set]))
+            [clojure.set :as set]
+            [goedel.type :as t]))
 
 ;;;
 
@@ -55,6 +56,8 @@
   {::type ::->
    ::type-args [t1 t2]})
 
+(def → ->)
+
 (defn * [t]
   ^{`s/specize* #(s/* t)}
   (seq-of t))
@@ -79,6 +82,9 @@
 
 (defn existential [n]
   {::existential n})
+
+(defn universal [n]
+  {::universal n})
 
 ;;;
 
@@ -113,6 +119,28 @@
        x))
    t))
 
+(defmacro forall [tvs typ]
+  `(let [~@(->> tvs
+                (map-indexed vector)
+                (mapcat (fn [[idx vname]]
+                          [vname `(universal ~idx)])))]
+     ~typ))
+
+(defmacro ∀ [tvs typ]
+  `(forall ~tvs ~typ))
+
 (comment
   (universalize (existential 1))
   )
+
+(defn alpha= [t1 t2]
+  (or
+   (and (existential? t1) (existential? t2))
+   (and (universal? t1) (universal? t2))
+   (and (= (::type t1)
+           (::type t2))
+       (every? identity (map alpha=
+                             (::type-args t1)
+                             (::type-args t2)))) ))
+
+(def α= alpha=)

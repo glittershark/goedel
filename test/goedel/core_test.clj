@@ -8,7 +8,7 @@
             [goedel.type :as t]))
 
 (defmacro are-types [& exprs-and-types]
-  `(are [x# ty#] (= ty# (sut/type-infer (macroexpand x#)))
+  `(are [x# ty#] (t/α= ty# (sut/type-infer (macroexpand x#)))
      ~@exprs-and-types))
 
 (defn gen-simple-type []
@@ -109,10 +109,15 @@
              `(fn [x#]
                 [1 2 3 x#]))))))
 
+  (testing "parametric functions"
+    (is (t/alpha= (t/∀ [x] (t/-> (t/tuple x) x))
+                  (sut/type-infer (macroexpand `(fn [x#] x#))))))
+
   (testing "stdlib function calls"
     (are-types
      `(inc 1) t/integer
-     `(inc 1.0) t/float)
+     `(inc 1.0) t/float
+     `identity (t/∀ [x] (t/→ (t/tuple x) x)))
 
     (checking "eta-abstracted" 10 [eta-times gen/pos-int]
       (let [abstract-n-times (apply comp (repeat eta-times eta-abstract))]
