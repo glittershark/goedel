@@ -22,7 +22,8 @@
             [goedel.protocols :as p]
             [goedel.type :as t]
             [goedel.type-infer.state :as state]
-            [goedel.utils.monad :refer [update-val]]))
+            [goedel.utils.monad :refer [update-val m-map m-reduce]]
+            [goedel.type.refinement :as ref]))
 
 (def special-form?
   #{`let*
@@ -55,81 +56,6 @@
        (some #{\.} (name s))))
 
 ;;;
-
-(defmonadfn m-reduce
-  ([f xs]
-   (match [xs]
-     [([] :seq)] (f)
-     [([x] :seq)] (m-result x)
-     [([x1 x2 & xs*] :seq)] (domonad
-                              [x (f x1 x2)
-                               r (m-reduce f (cons x xs*))]
-                              r)))
-  ([f v xs]
-   (match [xs]
-     [([] :seq)] (m-result v)
-     [([x & xs*] :seq)] (domonad
-                          [x′ (f v x)
-                           r (m-reduce f x′ xs)]
-                          r))))
-
-(defmonadfn m-map
-  ([f coll]
-   (m-seq (map f coll)))
-  ([f coll & colls]
-   (m-seq (apply map f coll colls))))
-
-(defmonadfn m-walk
-  [inner outer form]
-  (cond
-   (list? form)
-   (domonad
-     [iforms (m-map inner form)
-      ilist (apply list iforms)
-      r (outer ilist)]
-     r)
-
-   (instance? clojure.lang.IMapEntry form)
-   (domonad
-     [ik (inner (key form))
-      iv (inner (val form))
-      r (outer (clojure.lang.MapEntry/create ik iv))]
-     r)
-
-   (seq? form)
-   (domonad
-     [iforms (m-map inner form)
-      r (outer (doall iforms))]
-     r)
-
-   (instance? clojure.lang.IRecord form)
-   (domonad
-     [ir (m-reduce (fn [r x] (domonad [ix (inner x)] (conj r ix)))
-                   form form)
-      r (outer ir)]
-     r)
-
-   (coll? form)
-   (domonad
-     [iforms (m-map inner form)
-      r (outer (into (empty form) iforms))]
-     r)
-
-   :else (outer form)))
-
-(defmonadfn m-postwalk
-  [f form]
-  (m-walk (partial m-postwalk f) f form))
-
-(defmonadfn m-prewalk
-  [f form]
-  (domonad
-    [fform (f form)
-     r (m-walk (partial m-prewalk f) m-result fform)]
-    r))
-
-;;;
-;;;map
 
 (defn source [f]
   (-> f
@@ -206,14 +132,13 @@
                 (loop [obj-t obj-t]
                   (cond
                     (class? obj-t)
-                    (do
-                      (-> obj-t
-                          (.getMethod
-                           (name m)
-                           (into-array Class (map p/as-java-class arg-ts)))
-                          .getReturnType
-                          t/class->type
-                          m-result))
+                    (-> obj-t
+                        (.getMethod
+                         (name m)
+                         (into-array Class (map p/as-java-class arg-ts)))
+                        .getReturnType
+                        t/class->type
+                        m-result)
                     (class-symbol? obj-t)
                     (recur (resolve obj-t))
                     (= ::t/class (::t/type obj-t))
@@ -292,11 +217,11 @@
            (select-keys vs dependent-args))))
 
   (defn subs-universals [t vs]
-    (m-prewalk
+    (t/m-prewalk
      (fn [x]
        (cond
          (and (t/universal? x) (contains? vs x)) (m-result (get vs x))
-         (= ::t/dependent (::t/type x)) (instantiate-dependent x vs)
+         (t/dependent? x) (instantiate-dependent x vs)
          :else (m-result x)))
      t))
 
@@ -308,7 +233,9 @@
        ft* (<unify ft (t/-> (t/types* arg-tys) rv))
        vs (fetch-val ::state/vars)
        ft** (subs-universals ft* vs)]
-      (t/return-type ft**)))
+      (do
+        (println ft**)
+        (t/return-type ft**))))
 
   (defn lookup-and-type-infer [s]
     (let [src (source s)]
@@ -337,10 +264,11 @@
        :let [_ (if (nil? st)
                  (throw (ex-info "nil state!" {:expr expr})))]
        r (condp #(%1 %2) expr
-           integer? (m-result t/integer)
-           string? (m-result t/string)
-           boolean? (m-result t/boolean)
-           float? (m-result t/float)
+           integer? (m-result (ref/exact t/integer expr))
+           string? (m-result (ref/exact t/string expr))
+           boolean? (m-result (ref/exact t/boolean expr))
+           float? (m-result (ref/exact t/float expr))
+           keyword? (m-result (ref/exact t/keyword expr))
            vector? (domonad
                      [val-types (m-map type-infer* expr)
                       t (m-reduce <unify val-types)]

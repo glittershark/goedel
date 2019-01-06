@@ -1,22 +1,105 @@
 (ns goedel.type
-  (:refer-clojure :exclude [type vector-of boolean float -> * class])
-  (:require [clojure.core :as c]
+  (:refer-clojure
+   :exclude
+   [type vector-of boolean float -> * class deftype < parents keyword])
+  (:require [clojure.algo.monads :refer [defmonadfn domonad m-map]]
+            [clojure.core :as c]
+            [clojure.core.logic :as l]
+            [clojure.set :as set]
             [clojure.spec.alpha :as s]
             [clojure.walk :as walk]
             [goedel.protocols :as p]
-            [clojure.set :as set]
-            [goedel.type :as t]))
+            [goedel.type.lattice :as lattice]
+            [goedel.type.refinement :as ref]
+            [ubergraph.core :as uber]))
+
+(s/def ::deftype-args
+  (s/cat :name simple-symbol?
+         :args (s/? (s/coll-of simple-symbol? :kind vector?))
+         :meta (s/? map?)
+         :protocol-impls (s/* any?)))
+
+(defmacro deftype
+  {:arglists '([name ?args ?meta & protocol-impls])}
+  [& args]
+  (let [{:keys [name args meta protocol-impls]} (s/conform ::deftype-args args)
+        kw-name (keyword "goedel.type" (c/name name))
+        protocol-meta
+        (into {}
+              (map (fn [[fname [this-arg & fn-args] & fn-body]]
+                     [fname `(fn [~this-arg ~@fn-args]
+                               ~@(if args
+                                   [`(let [~args ~this-arg]
+                                       ~@fn-body)]
+                                   fn-body))]))
+              protocol-impls)]
+    (if args
+      `(defn ~name ~@(when meta [meta]) ~args
+         (with-meta
+           {::type ~kw-name
+            ::type-args ~args}
+           ~protocol-meta))
+      `(do (def ~name
+             (with-meta
+               {::type ~kw-name}
+               ~protocol-meta))
+           ~@(when meta [`(alter-meta! #'~name merge ~meta)])))))
+
+(comment
+  (deftype top
+    (s/specize* [_] (s/spec any?))
+    (p/as-java-class [_] Object))
+
+  (p/as-java-class top)
+  )
 
 ;;;
 
-(def top
-  ^{`s/specize* #(s/spec any?)
-    `p/as-java-class (fn [_] Object)}
-  {::type ::top})
+(deftype top
+  (s/specize* [_] (s/spec any?))
+  (p/as-java-class [_] Object))
 
-(def bot
-  ^{`s/specize* #(s/spec any?)}
-  {::type ::bot})
+(deftype bot
+  (s/specize* [_] (s/spec (constantly false)))
+  (p/as-java-class [_] nil))
+
+(extend-protocol p/Type
+  Object
+  (parents [_] [top])
+  (children [_] [bot]))
+
+;;;
+
+(def ^:dynamic *hierarchy* (atom (uber/digraph)))
+
+(defn inherit! [t1 t2]
+  (swap! *hierarchy* uber/add-directed-edges [(::type t1) (::type t2)]))
+
+(defn parents [t]
+  (into #{top}
+        (concat (p/parents t)
+                (when (contains? t ::ref/refinement)
+                  (dissoc t ::ref/refinement)))))
+
+(defn children [t]
+  (into #{bot} (p/children t)))
+
+(def lattice
+  (reify lattice/BasicDigraph
+    (successors [_ {::keys [type] :as t}]
+      (into (lattice/successors @*hierarchy* type)
+            (parents type)))
+    (predecessors [_ {::keys [type] :as t}]
+      (into (lattice/predecessors @*hierarchy* type)
+            (children type)))))
+
+(defn sup [t₁ t₂]
+  (or (lattice/sup lattice t₁ t₂) top))
+
+(defn sub [t₁ t₂]
+  (or (lattice/sup lattice t₁ t₂) bot))
+
+;;;
 
 (def integer
   ^{`s/specize* #(s/spec integer?)
@@ -36,20 +119,25 @@
     `p/as-java-class (fn [_] Double/TYPE)}
   {::type ::float})
 
+(deftype keyword
+  (s/specize* [_] (s/spec keyword?))
+  (p/as-java-class [_] clojure.lang.Keyword))
+
 (def var
   ^{`s/specize* #(s/spec var?)
     `p/as-java-class clojure.lang.Var}
   {::type ::var})
 
-(defn vector-of [t]
-  ^{`s/specize* #(s/coll-of t :kind vector?)}
-  {::type ::vector-of
-   ::type-args [t]})
-
 (defn seq-of [t]
   ^{`s/specize* #(s/coll-of t)}
   {::type ::seq-of
    ::type-args [t]})
+
+(defn vector-of [t]
+  ^{`s/specize* #(s/coll-of t :kind vector?)}
+  {::type ::vector-of
+   ::type-args [t]})
+(inherit! ::vector-of ::seq-of)
 
 (defn -> [t1 t2]
   ^{`s/specize* #(s/fspec :args t1 :ret t2)}
@@ -75,6 +163,8 @@
   {::type ::dependent
    ::dependent-args arg-vars
    ::dependent-fn f})
+
+(defn dependent? [t] (= ::dependent (::type t)))
 
 (defn class [cls]
   {::type ::class
@@ -119,6 +209,17 @@
        x))
    t))
 
+(defmonadfn m-walk [inner outer type]
+  (domonad
+    [itas (if-let [type-args (::type-args type)]
+            (m-map inner type-args)
+            (m-result nil))
+     r (outer (if itas (assoc type ::type-args (vec itas)) type))]
+    r))
+
+(defmonadfn m-prewalk [f type]
+  (m-bind (f type) (partial m-walk (partial m-prewalk f) m-result)))
+
 (defmacro forall [tvs typ]
   `(let [~@(->> tvs
                 (map-indexed vector)
@@ -139,14 +240,29 @@
 (defmacro ∃ [tvs typ]
   `(exists ~tvs ~typ))
 
-(defn alpha= [t1 t2]
+(defn alpha= [t₁ t₂]
   (or
-   (and (existential? t1) (existential? t2))
-   (and (universal? t1) (universal? t2))
-   (and (= (::type t1)
-           (::type t2))
-       (every? identity (map alpha=
-                             (::type-args t1)
-                             (::type-args t2)))) ))
+   (and (existential? t₁) (existential? t₂))
+   (and (universal? t₁) (universal? t₂))
+   (and (= (::type t₁)
+           (::type t₂))
+        (ref/intersect? (::ref/refinement t₁)
+                        (::ref/refinement t₂))
+        (every? identity (map alpha=
+                              (::type-args t₁)
+                              (::type-args t₂))))))
 
 (def α= alpha=)
+
+(defn ⊆ [t₁ t₂]
+  (or (α= t₁ t₂)
+      (and (= (::type t₁) (::type t₁))
+           (= (count (::type-args t₁))
+              (count (::type-args t₂)))
+           (ref/intersect? (::ref/refinement t₁)
+                           (::ref/refinement t₂))
+           (every? some? (map ⊆
+                          (::type-args t₁)
+                          (::type-args t₂))))
+      (when-let [ps (seq (parents t₁))]
+        (some #(⊆ % t₂) ps))))

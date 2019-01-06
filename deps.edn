@@ -4,7 +4,10 @@
         org.clojure/algo.monads {:mvn/version "0.1.6"}
         org.clojure/test.check {:mvn/version "0.10.0-alpha3"}
         com.gfredericks/test.chuck {:mvn/version "0.2.9"}
-        instaparse {:mvn/version "1.4.8"}}
+        instaparse {:mvn/version "1.4.8"}
+
+        ubergraph {:mvn/version "0.5.2"}
+        org.clojure/core.logic {:mvn/version "0.8.11"}}
 
  :aliases
  {:test
