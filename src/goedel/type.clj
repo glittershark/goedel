@@ -13,45 +13,56 @@
             [goedel.type.refinement :as ref]
             [ubergraph.core :as uber]))
 
+(s/def ::inherits ident?)
 (s/def ::deftype-args
   (s/cat :name simple-symbol?
          :args (s/? (s/coll-of simple-symbol? :kind vector?))
          :meta (s/? map?)
+         :options (s/keys* :opt-un [::inherits])
          :protocol-impls (s/* any?)))
 
+(declare inherit!)
 (defmacro deftype
   {:arglists '([name ?args ?meta & protocol-impls])}
   [& args]
-  (let [{:keys [name args meta protocol-impls]} (s/conform ::deftype-args args)
-        kw-name (keyword "goedel.type" (c/name name))
+  (let [{:keys [name args meta protocol-impls]
+         {:keys [inherits]} :options} (s/conform ::deftype-args args)
+
+        kw-name (c/keyword "goedel.type" (c/name name))
         protocol-meta
         (into {}
               (map (fn [[fname [this-arg & fn-args] & fn-body]]
-                     [fname `(fn [~this-arg ~@fn-args]
-                               ~@(if args
-                                   [`(let [~args ~this-arg]
-                                       ~@fn-body)]
-                                   fn-body))]))
+                     (let [qualified-fname
+                           (symbol (c/-> *ns*
+                                         ns-aliases
+                                         (get (symbol (namespace fname)))
+                                         ns-name
+                                         c/name)
+                                   (c/name fname))]
+                       [`(quote ~qualified-fname)
+                        `(fn [~this-arg ~@fn-args]
+                                           ~@(if args
+                                               [`(let [~args ~this-arg]
+                                                   ~@fn-body)]
+                                               fn-body))])))
               protocol-impls)]
-    (if args
-      `(defn ~name ~@(when meta [meta]) ~args
-         (with-meta
-           {::type ~kw-name
-            ::type-args ~args}
-           ~protocol-meta))
-      `(do (def ~name
+    `(do
+       ~(if args
+          `(defn ~name ~@(when meta [meta]) ~args
              (with-meta
-               {::type ~kw-name}
+               {::type ~kw-name
+                ::type-args ~args}
                ~protocol-meta))
-           ~@(when meta [`(alter-meta! #'~name merge ~meta)])))))
-
-(comment
-  (deftype top
-    (s/specize* [_] (s/spec any?))
-    (p/as-java-class [_] Object))
-
-  (p/as-java-class top)
-  )
+          `(do (def ~name
+                 (with-meta
+                   {::type ~kw-name}
+                   ~protocol-meta))
+               ~@(when meta [`(alter-meta! #'~name merge ~meta)])))
+       ~@(when inherits
+           [`(inherit! ~name (let [inherits# ~inherits]
+                               (if (keyword? inherits#)
+                                 {::type inherits#}
+                                 inherits#)))]))))
 
 ;;;
 
@@ -76,22 +87,25 @@
   (swap! *hierarchy* uber/add-directed-edges [(::type t1) (::type t2)]))
 
 (defn parents [t]
-  (into #{top}
-        (concat (p/parents t)
-                (when (contains? t ::ref/refinement)
-                  (dissoc t ::ref/refinement)))))
+  (if (= t top) #{}
+      (into #{top}
+            (concat (p/parents t)
+                    (when (contains? t ::ref/refinement)
+                      (dissoc t ::ref/refinement))))))
 
 (defn children [t]
-  (into #{bot} (p/children t)))
+  (if (= t bot) #{} (into #{bot} (p/children t))))
 
 (def lattice
   (reify lattice/BasicDigraph
     (successors [_ {::keys [type] :as t}]
-      (into (lattice/successors @*hierarchy* type)
-            (parents type)))
+      (into (map (fn [ty] {::type ty})
+                 (lattice/successors @*hierarchy* type))
+            (parents t)))
     (predecessors [_ {::keys [type] :as t}]
-      (into (lattice/predecessors @*hierarchy* type)
-            (children type)))))
+      (into (map (fn [ty] {::type ty})
+                 (lattice/predecessors @*hierarchy* type))
+            (children t)))))
 
 (defn sup [t₁ t₂]
   (or (lattice/sup lattice t₁ t₂) top))
@@ -101,10 +115,19 @@
 
 ;;;
 
-(def integer
-  ^{`s/specize* #(s/spec integer?)
-    `p/as-java-class (fn [_] Long/TYPE)}
-  {::type ::integer})
+(deftype number
+  (s/specize* [_] (s/spec number?))
+  (p/as-java-class [_] Number))
+
+(deftype integer
+  :inherits number
+  (s/specize* [_] (s/spec integer?))
+  (p/as-java-class [_] Long/TYPE))
+
+(deftype float
+  :inherits number
+  (s/specize* [_] (s/spec float?))
+  (p/as-java-class [_] Double/TYPE))
 
 (def string
   ^{`s/specize* #(s/spec string?)}
@@ -113,11 +136,6 @@
 (def boolean
   ^{`s/specize* #(s/spec boolean?)}
   {::type ::boolean})
-
-(def float
-  ^{`s/specize* #(s/spec float?)
-    `p/as-java-class (fn [_] Double/TYPE)}
-  {::type ::float})
 
 (deftype keyword
   (s/specize* [_] (s/spec keyword?))

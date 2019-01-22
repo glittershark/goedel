@@ -16,7 +16,11 @@
 (deftest ⊆-test
   (are [t₁ t₂] (sut/⊆ t₁ t₂)
     sut/integer sut/integer
-    (ref/exact sut/integer 7) sut/integer))
+    (ref/exact sut/integer 7) sut/integer
+    (sut/vector-of (ref/exact sut/integer 7)) (sut/vector-of sut/integer)
+    (sut/vector-of
+     (sut/vector-of (ref/exact sut/integer 7))) (sut/vector-of
+                                                 (sut/vector-of sut/integer))))
 
 (deftest m-walk-test
   (with-monad identity-m

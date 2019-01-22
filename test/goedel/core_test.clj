@@ -1,5 +1,6 @@
 (ns goedel.core-test
-  (:require [clojure.spec.alpha :as s]
+  (:require [clojure.core.logic :as l]
+            [clojure.spec.alpha :as s]
             [clojure.test :refer :all]
             [clojure.test.check.generators :as gen]
             [com.gfredericks.test.chuck.clojure-test :refer [checking]]
@@ -66,8 +67,8 @@
     (checking "vector of vector" 100
         [x (s/gen (s/coll-of (s/coll-of integer? :kind vector? :min-count 1)
                              :kind vector? :min-count 1))]
-        (is (t/⊆ (sut/type-infer x)
-                 (t/vector-of (t/vector-of t/integer)))))
+      (is (t/⊆ (sut/type-infer x)
+               (t/vector-of (t/vector-of t/integer)))))
 
     (checking "heterogenous vector" 100
         [v1 (s/gen (s/coll-of integer?
@@ -77,7 +78,7 @@
                               :kind vector?
                               :min-count 1))
          :let [x (vec (concat v1 v2))]]
-        (is (= (t/vector-of t/bot) (sut/type-infer x)))))
+      (is (= (t/vector-of t/top) (sut/type-infer x)))))
 
   (testing "syntactic forms"
     (checking "do" 100 [xts (gen/list (exprs-with-types))
@@ -93,19 +94,30 @@
     (checking "def" 100 [[x t] (exprs-with-types)]
       (is (α= t/var (sut/type-infer (macroexpand `(def ~'x ~x)))))
       (is (α= t (sut/type-infer (macroexpand `(do (def x# ~x)
-                                                 x#))))))
+                                                  x#))))))
 
     (testing "if"
       (testing "simple cases"
         (are-types
-         `(if true 1 2) t/integer
-         `(if false 1 2) t/integer
-         `(fn [x#] (if true 1 x#)) (t/-> (t/tuple t/integer) t/integer))))
+         `(if true 1 2) (ref/refine t/integer (ref/or #(l/== % 1)
+                                                      #(l/== % 2)))
+         `(if false 1 2) (ref/refine t/integer (ref/or #(l/== % 1)
+                                                       #(l/== % 2)))))
+
+      (testing "in a function"
+        (is
+         (α= (t/-> (t/tuple t/integer) t/integer)
+             (sut/type-infer (macroexpand
+                              `(fn [x#] (if true 1 x#))))))))
 
     (testing "java interop"
       (are-types
-       (. clojure.lang.Numbers (inc 1)) t/integer
-       (clojure.lang.Numbers/inc 1) t/integer)))
+       (. clojure.lang.Numbers (inc 1)) (ref/exact t/integer 2)
+       (clojure.lang.Numbers/inc 1) (ref/exact t/integer 2))))
+
+  (testing "supertype unification"
+    (is (α= (t/vector-of t/number)
+            (sut/type-infer [1 1.0 2 2.0]))))
 
   (testing "simple functions"
     (is (α= (t/-> (t/tuple t/integer)
@@ -116,8 +128,8 @@
                  [1 2 3 x#]))))))
 
   (testing "parametric functions"
-    (is (t/alpha= (t/∀ [x] (t/-> (t/tuple x) x))
-                  (sut/type-infer (macroexpand `(fn [x#] x#))))))
+    (is (α= (t/∀ [x] (t/-> (t/tuple x) x))
+            (sut/type-infer (macroexpand `(fn [x#] x#))))))
 
   (testing "stdlib function calls"
     (are-types
@@ -130,8 +142,3 @@
         (are-types
          (abstract-n-times `(inc 1)) t/integer
          (abstract-n-times `(inc 1.0)) t/float)))))
-
-(comment
-  (sut/type-infer `(. clojure.lang.Numbers (inc 1)))
-  (sut/type-infer `(inc 1))
-  )

@@ -19,11 +19,26 @@
    [::α₂ ::β₂]
    [::α₂ ::β₃]
    [::β₁ ::γ₁]
-   [::β₂ ::γ₂]
+   [::β₂ ::γ₁]
    [::β₂ ::γ₂]
    [::β₃ ::γ₂]
    [::γ₁ ::⊤]
    [::γ₂ ::⊤]))
+
+(def star-trek
+  (uber/digraph
+   [::α₁ ::β]
+   [::α₂ ::β]
+   [::α₁ ::⊤]
+   [::α₂ ::⊤]
+   [::β ::⊤]
+   ))
+
+(comment
+  (uber/viz-graph diamond)
+  (uber/viz-graph quad-diamond)
+  (uber/viz-graph star-trek)
+  )
 
 (deftest lattice?-test
   (is (sut/lattice? diamond))
@@ -33,4 +48,6 @@
   (is (= ::⊥ (sut/∨ diamond ::n₁ ::n₂))))
 
 (deftest sup-test
-  (is (= ::⊤ (sut/∧ diamond ::n₁ ::n₂))))
+  (is (= ::⊤ (sut/∧ diamond ::n₁ ::n₂)))
+  (is (= ::β (sut/∧ star-trek ::α₁ ::α₂))
+      "finds the *least* common parent"))

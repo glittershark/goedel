@@ -1,29 +1,17 @@
 (ns goedel.core
-  (:require [clojure.algo.monads
+  (:refer-clojure :exclude [cond])
+  (:require [better-cond.core :refer [cond]]
+            [clojure.algo.monads
              :refer
-             [defmonadfn
-              domonad
-              fetch-state
-              fetch-val
-              m-bind
-              m-chain
-              m-result
-              m-seq
-              set-state
-              set-val
-              state-m
-              update-state
-              with-monad]]
+             [domonad fetch-state fetch-val m-result set-val state-m with-monad]]
+            [clojure.core.logic :as l]
             [clojure.core.match :refer [match]]
-            [clojure.datafy :refer [datafy]]
             [clojure.repl :as repl]
-            [clojure.spec.alpha :as s]
-            [clojure.walk :as walk]
             [goedel.protocols :as p]
             [goedel.type :as t]
             [goedel.type-infer.state :as state]
-            [goedel.utils.monad :refer [update-val m-map m-reduce]]
-            [goedel.type.refinement :as ref]))
+            [goedel.type.refinement :as ref]
+            [goedel.utils.monad :refer [m-map m-reduce update-val]]))
 
 (def special-form?
   #{`let*
@@ -67,40 +55,48 @@
 
 (with-monad state-m
 
-  (defn sub [t1 t2]
-    (m-result (if (= t1 t2) t1 t/bot)))
-
-  (defn sup [t1 t2]
-    (m-result (if (= t1 t2) t1 t/top)))
-
-  (defn <unify
+  (defn ∧unify
     "unify covariantly up the lattice"
-    ([] (m-result t/bot))
+    ([] (m-result t/top))
     ([t1] t1)
     ([t1 t2]
      (cond
        (= t1 t/top) (m-result t/top)
        (= t1 t2) (m-result t2)
-       (t/type-var? t1) (domonad
-                          [_ (update-val ::state/vars assoc t1 t2)]
-                          t2)
-       (t/type-var? t2) (<unify t2 t1)
+
+       (t/type-var? t1) (let [t2′ (ref/unrefine t2)]
+                          (domonad
+                            [_ (update-val ::state/vars assoc t1 t2′)]
+                            t2′))
+
+       (t/type-var? t2) (∧unify t2 t1)
+
+       :let [ref1 (::ref/refinement t1)
+             ref2 (::ref/refinement t2)]
        (and (= (::t/type t1) (::t/type t2))
             (= (count (::t/type-args t1))
                (count (::t/type-args t2))))
-       (domonad
-         [args (m-map <unify (::t/type-args t1) (::t/type-args t2))]
-         (assoc t1 ::t/type-args args))
-       :else (sub t1 t2))))
+       (if (or (not ref1)
+               (not ref2)
+               (ref/intersect? (::ref/refinement ref1)
+                               (::ref/refinement ref2)))
+         (domonad
+           [args (m-map ∧unify (::t/type-args t1) (::t/type-args t2))]
+           (-> t1
+               (assoc ::t/type-args args)
+               (ref/∧unify-refinements t2)))
+         t/bot)
 
-  (defn >unify
+       :else (m-result (t/sup t1 t2)))))
+
+  (defn ∨unify
     "unify contravariantly down the lattice"
     ([] t/top)
     ([t1] t1)
     ([t1 t2]
      (cond
-       (= t1 t/top) t2
-       (= t1 t2) t2
+       (= t1 t/top) (m-result t2)
+       (= t1 t2) (m-result t2)
        :else (throw (ex-info "Could not unify"
                              {:types [t1 t2]})))))
 
@@ -206,7 +202,7 @@
       (domonad
         [then-t (type-infer* then)
          else-t (type-infer* else)
-         r (<unify then-t else-t)]
+         r (∧unify then-t else-t)]
         r)))
 
 
@@ -230,12 +226,10 @@
       [arg-tys (m-map type-infer* args)
        ft (type-infer* f)
        rv (state/new-exist-var)
-       ft* (<unify ft (t/-> (t/types* arg-tys) rv))
+       ft* (∧unify ft (t/-> (t/types* arg-tys) rv))
        vs (fetch-val ::state/vars)
        ft** (subs-universals ft* vs)]
-      (do
-        (println ft**)
-        (t/return-type ft**))))
+      (t/return-type ft**)))
 
   (defn lookup-and-type-infer [s]
     (let [src (source s)]
@@ -271,7 +265,7 @@
            keyword? (m-result (ref/exact t/keyword expr))
            vector? (domonad
                      [val-types (m-map type-infer* expr)
-                      t (m-reduce <unify val-types)]
+                      t (m-reduce ∧unify val-types)]
                      (t/vector-of t))
            local-var-symbol? (domonad
                                [vars (fetch-val ::state/vars)]
@@ -288,21 +282,3 @@
 
 (defn type-infer [expr]
   (first ((type-infer* expr) state/empty)))
-
-(comment
-  ((domonad state-m
-            [x (fetch-val :foo)]
-            x)
-   {:foo 2})
-
-  (type-infer (macroexpand `(let [x# 1] x#)))
-
-  (type-infer [1 2 3])
-
-  (type-infer
-   (nth (source `inc) 2))
-
-  (type-infer
-   '((clojure.core/fn [x__46809__auto__] (clojure.core/inc x__46809__auto__))
-     1.0))
-  )

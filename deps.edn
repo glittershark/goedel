@@ -7,7 +7,9 @@
         instaparse {:mvn/version "1.4.8"}
 
         ubergraph {:mvn/version "0.5.2"}
-        org.clojure/core.logic {:mvn/version "0.8.11"}}
+        org.clojure/core.logic {:mvn/version "0.8.11"}
+
+        better-cond {:mvn/version "2.0.2"}}
 
  :aliases
  {:test

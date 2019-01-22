@@ -1,7 +1,6 @@
 (ns goedel.type.lattice
   (:require [clojure.set :as set]
             [clojure.template :refer [do-template]]
-            [goedel.type :as t]
             [ubergraph.alg :as alg]
             [ubergraph.core :as uber])
   (:import ubergraph.core.Ubergraph))
@@ -20,7 +19,9 @@
  (defn f [g n1 n2]
    (loop [left  #{n1}
           right #{n2}]
-     (let [inter (set/intersection left right)]
+     (let [inter* (set/intersection left right)
+           inter (set/difference inter*
+                                 (into #{} (mapcat (partial rel g)) inter*))]
        (case (count inter)
          1 (first inter)
          0 (let [next-left  (into left (mapcat (partial rel g) left))
