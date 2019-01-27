@@ -2,8 +2,7 @@
   (:refer-clojure
    :exclude
    [type vector-of boolean float -> * class deftype < parents keyword])
-  (:require [clojure.algo.monads :refer [defmonadfn domonad m-map]]
-            [clojure.core :as c]
+  (:require [clojure.core :as c]
             [clojure.core.logic :as l]
             [clojure.set :as set]
             [clojure.spec.alpha :as s]
@@ -91,7 +90,7 @@
       (into #{top}
             (concat (p/parents t)
                     (when (contains? t ::ref/refinement)
-                      (dissoc t ::ref/refinement))))))
+                      [(dissoc t ::ref/refinement)])))))
 
 (defn children [t]
   (if (= t bot) #{} (into #{bot} (p/children t))))
@@ -227,16 +226,15 @@
        x))
    t))
 
-(defmonadfn m-walk [inner outer type]
-  (domonad
-    [itas (if-let [type-args (::type-args type)]
-            (m-map inner type-args)
-            (m-result nil))
-     r (outer (if itas (assoc type ::type-args (vec itas)) type))]
-    r))
+(defn walk [inner outer type]
+  (let
+      [itas (when-let [type-args (::type-args type)]
+              (map inner type-args))]
+    (outer (if itas (assoc type ::type-args (vec itas)) type))))
 
-(defmonadfn m-prewalk [f type]
-  (m-bind (f type) (partial m-walk (partial m-prewalk f) m-result)))
+(defn prewalk [f type]
+  (walk (partial prewalk f) identity (f type)))
+
 
 (defmacro forall [tvs typ]
   `(let [~@(->> tvs

@@ -1,7 +1,6 @@
 {:deps {org.clojure/clojure {:mvn/version "1.10.0"}
 
         org.clojure/core.match {:mvn/version "0.3.0-alpha5"}
-        org.clojure/algo.monads {:mvn/version "0.1.6"}
         org.clojure/test.check {:mvn/version "0.10.0-alpha3"}
         com.gfredericks/test.chuck {:mvn/version "0.2.9"}
         instaparse {:mvn/version "1.4.8"}

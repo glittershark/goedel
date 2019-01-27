@@ -1,10 +1,6 @@
 (ns goedel.type-infer.state
-  (:refer-clojure :exclude [empty])
-  (:require [clojure.algo.monads
-             :refer
-             [domonad fetch-val state-m update-state with-monad]]
-            [goedel.utils.monad :refer [update-val]]
-            [goedel.type :as t]))
+  (:refer-clojure :exclude [empty assoc!])
+  (:require [goedel.type :as t]))
 
 (def empty
   {::exist-type-vars {}
@@ -12,16 +8,35 @@
    ::counter 0
    ::ns nil})
 
-(with-monad state-m
-  (defn new-exist-var []
-    (domonad
-      [counter (fetch-val ::counter)
-       :let [var (t/existential counter)]
-       _ (update-val ::counter inc)
-       _ (update-val ::exist-type-vars assoc var nil)]
-      var))
+(def ^:dynamic *state* nil)
 
-  (defn lookup-var [v]
-    (domonad
-      [vars (fetch-val ::vars)]
-      (get vars v))))
+
+(defmacro with-state
+  {:indent/style 0}
+  [& body]
+  `(binding [*state* (or *state* (atom empty))]
+     ~@body))
+
+(defn lookup-var [vname]
+  (get-in @*state* [::vars vname]))
+
+(defn assoc! [& kvs]
+  (apply swap! *state* assoc kvs))
+
+(defn update! [k f & args]
+  (apply swap! *state* update k f args))
+
+(defn set-var! [v t]
+  (update! ::vars assoc v t))
+
+(defn new-exist-var! []
+  (-> (swap! *state*
+             (fn [{::keys [counter] :as s}]
+               (-> s
+                   (update ::counter inc)
+                   (update ::exist-type-vars
+                           assoc (t/existential counter) nil))))
+      ::counter
+      dec
+      (t/existential )))
+

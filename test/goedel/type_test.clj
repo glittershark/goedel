@@ -1,7 +1,5 @@
 (ns goedel.type-test
-  (:require [clojure.algo.monads :refer [domonad identity-m state-m with-monad
-                                         update-state]]
-            [clojure.test :refer :all]
+  (:require [clojure.test :refer :all]
             [goedel.type :as sut]
             [goedel.type.refinement :as ref]))
 
@@ -11,7 +9,13 @@
     (sut/tuple sut/integer) (sut/tuple sut/integer)
     (sut/tuple sut/integer) (sut/tuple sut/integer)
     (sut/tuple sut/integer (sut/existential 1))
-    (sut/tuple sut/integer (sut/existential 0))))
+    (sut/tuple sut/integer (sut/existential 0)))
+
+  (are [t1 t2] (not (sut/alpha= t1 t2))
+    sut/integer sut/float
+    (sut/tuple sut/integer) sut/float
+    (sut/tuple sut/integer) (sut/tuple sut/float)
+    (sut/tuple sut/integer) (sut/tuple (sut/existential 1))))
 
 (deftest ⊆-test
   (are [t₁ t₂] (sut/⊆ t₁ t₂)
@@ -22,19 +26,10 @@
      (sut/vector-of (ref/exact sut/integer 7))) (sut/vector-of
                                                  (sut/vector-of sut/integer))))
 
-(deftest m-walk-test
-  (with-monad identity-m
-    (are [x y] (= x y)
-      sut/integer               (sut/m-prewalk identity sut/integer)
-      (sut/vector-of sut/float) (sut/m-prewalk #(if (= % sut/integer)
-                                                  sut/float
-                                                  %)
-                                               (sut/vector-of sut/integer))))
-
-  (with-monad state-m
-    (are [expected actual] (= expected (actual 0))
-      [sut/integer 1] (sut/m-prewalk (fn [t]
-                                       (domonad
-                                         [_ (update-state inc)]
-                                         t))
-                                     sut/integer))))
+(deftest prewalk-test
+  (are [x y] (= x y)
+    sut/integer               (sut/prewalk identity sut/integer)
+    (sut/vector-of sut/float) (sut/prewalk #(if (= % sut/integer)
+                                              sut/float
+                                              %)
+                                           (sut/vector-of sut/integer))))

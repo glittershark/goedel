@@ -1,12 +1,12 @@
-(ns goedel.core-test
+(ns goedel.type-infer-test
   (:require [clojure.core.logic :as l]
             [clojure.spec.alpha :as s]
             [clojure.test :refer :all]
             [clojure.test.check.generators :as gen]
             [com.gfredericks.test.chuck.clojure-test :refer [checking]]
             [com.gfredericks.test.chuck.generators :as gen']
-            [goedel.core :as sut]
-            [goedel.type :as t :refer [α=]]
+            [goedel.type-infer :as sut]
+            [goedel.type :as t :refer [α= ⊆]]
             [goedel.type.refinement :as ref]))
 
 (defmacro are-types [& exprs-and-types]
@@ -70,7 +70,7 @@
       (is (t/⊆ (sut/type-infer x)
                (t/vector-of (t/vector-of t/integer)))))
 
-    (checking "heterogenous vector" 100
+    (checking "undecidably heterogenous vector" 100
         [v1 (s/gen (s/coll-of integer?
                               :kind vector?
                               :min-count 1))
@@ -78,7 +78,15 @@
                               :kind vector?
                               :min-count 1))
          :let [x (vec (concat v1 v2))]]
-      (is (= (t/vector-of t/top) (sut/type-infer x)))))
+      (is (= (t/vector-of t/top) (sut/type-infer x))))
+
+    #_(testing "decidably heterogenous vector"
+      (is (= (t/tuple t/integer t/string)
+             (sut/type-infer [1 "one"])))))
+
+    #_(testing "kv-splats"
+      (is (= (t/kv-splat t/keyword t/string)
+             (sut/type-infer [:foo "one" :bar "two"]))))
 
   (testing "syntactic forms"
     (checking "do" 100 [xts (gen/list (exprs-with-types))
@@ -106,9 +114,9 @@
 
       (testing "in a function"
         (is
-         (α= (t/-> (t/tuple t/integer) t/integer)
-             (sut/type-infer (macroexpand
-                              `(fn [x#] (if true 1 x#))))))))
+         (⊆ (sut/type-infer (macroexpand
+                              `(fn [x#] (if true 1 x#))))
+             (t/-> (t/tuple t/integer) t/integer)))))
 
     (testing "java interop"
       (are-types
@@ -119,13 +127,17 @@
     (is (α= (t/vector-of t/number)
             (sut/type-infer [1 1.0 2 2.0]))))
 
+  (testing "supertype unification"
+    (is (α= (t/vector-of t/number)
+            (sut/type-infer [1 1.0 2 2.0]))))
+
   (testing "simple functions"
-    (is (α= (t/-> (t/tuple t/integer)
-                  (t/vector-of t/integer))
-            (sut/type-infer
+    (is (⊆ (sut/type-infer
              (macroexpand
               `(fn [x#]
-                 [1 2 3 x#]))))))
+                 [1 2 3 x#])))
+            (t/-> (t/tuple t/integer)
+                  (t/vector-of t/integer)))))
 
   (testing "parametric functions"
     (is (α= (t/∀ [x] (t/-> (t/tuple x) x))
@@ -142,3 +154,14 @@
         (are-types
          (abstract-n-times `(inc 1)) t/integer
          (abstract-n-times `(inc 1.0)) t/float)))))
+
+(comment
+  (sut/type-infer `(. clojure.lang.Numbers (inc 1)))
+  (sut/type-infer `(inc 1))
+
+  (goedel.protocols/as-java-class
+   t/integer)
+
+  (sut/type-infer '(do (def one 1)
+                       one))
+  )

@@ -19,9 +19,12 @@
  (defn f [g n1 n2]
    (loop [left  #{n1}
           right #{n2}]
-     (let [inter* (set/intersection left right)
-           inter (set/difference inter*
-                                 (into #{} (mapcat (partial rel g)) inter*))]
+     (let [inter (set/intersection left right)
+           ;; Remove from the intersection all members that are *parents* of
+           ;; another node in the intersection. This finds the least/greatest
+           ;; common parent/descendant
+           inter (set/difference inter
+                                 (into #{} (mapcat (partial rel g)) inter))]
        (case (count inter)
          1 (first inter)
          0 (let [next-left  (into left (mapcat (partial rel g) left))

@@ -1,6 +1,7 @@
 (ns goedel.protocols
   (:refer-clojure :exclude [parents]))
 
+
 (defprotocol AsJavaClass
   :extend-via-metadata true
   (as-java-class [x]))
