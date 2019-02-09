@@ -1,7 +1,8 @@
 (ns goedel.type
   (:refer-clojure
    :exclude
-   [type vector-of boolean float -> * class deftype < parents keyword])
+   [type vector-of boolean float -> * class deftype < parents keyword
+    symbol])
   (:require [clojure.core :as c]
             [clojure.core.logic :as l]
             [clojure.set :as set]
@@ -32,18 +33,18 @@
         (into {}
               (map (fn [[fname [this-arg & fn-args] & fn-body]]
                      (let [qualified-fname
-                           (symbol (c/-> *ns*
-                                         ns-aliases
-                                         (get (symbol (namespace fname)))
-                                         ns-name
-                                         c/name)
-                                   (c/name fname))]
+                           (c/symbol (c/-> *ns*
+                                           ns-aliases
+                                           (get (c/symbol (c/namespace fname)))
+                                           ns-name
+                                           c/name)
+                                     (c/name fname))]
                        [`(quote ~qualified-fname)
                         `(fn [~this-arg ~@fn-args]
-                                           ~@(if args
-                                               [`(let [~args ~this-arg]
-                                                   ~@fn-body)]
-                                               fn-body))])))
+                           ~@(if args
+                               [`(let [~args (::type-args ~this-arg)]
+                                   ~@fn-body)]
+                               fn-body))])))
               protocol-impls)]
     `(do
        ~(if args
@@ -140,21 +141,40 @@
   (s/specize* [_] (s/spec keyword?))
   (p/as-java-class [_] clojure.lang.Keyword))
 
+(deftype symbol
+  (s/specize* [_] (s/spec symbol?))
+  (p/as-java-class [_] clojure.lang.Symbol))
+
 (def var
   ^{`s/specize* #(s/spec var?)
     `p/as-java-class clojure.lang.Var}
   {::type ::var})
+
+(deftype namespace
+  (s/specize* [_] (s/spec #(instance? clojure.lang.Namespace %)))
+  (p/as-java-class [_] clojure.lang.Namespace))
 
 (defn seq-of [t]
   ^{`s/specize* #(s/coll-of t)}
   {::type ::seq-of
    ::type-args [t]})
 
-(defn vector-of [t]
-  ^{`s/specize* #(s/coll-of t :kind vector?)}
-  {::type ::vector-of
-   ::type-args [t]})
-(inherit! ::vector-of ::seq-of)
+(deftype vector-of [t]
+  :inherits seq-of
+  (s/specize* [_] (s/coll-of t :kind vector?))
+  (p/as-java-class [_] clojure.lang.PersistentVector))
+
+(deftype map-of [kt vt]
+  :inherits seq-of
+  (s/specize* [_] (s/map-of kt vt :kind vector?))
+  (p/as-java-class [_] clojure.lang.PersistentHashMap))
+
+(comment
+  (s/conform ::deftype-args
+             (list ['t]
+                   :inherits 'seq-of
+                   '(s/specize* #(s/coll-of t :kind vector?))))
+  )
 
 (defn -> [t1 t2]
   ^{`s/specize* #(s/fspec :args t1 :ret t2)}
@@ -198,7 +218,8 @@
 (defn class->type [cls]
   (condp = cls
     Long/TYPE integer
-    Double/TYPE float))
+    Double/TYPE float
+    Void/TYPE bot))
 
 (defn return-type [function-type]
   (assert (= ::-> (::type function-type)))

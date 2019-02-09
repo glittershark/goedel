@@ -1,11 +1,13 @@
 (ns goedel.type-infer
   (:refer-clojure :exclude [core])
   (:require [better-cond.core :refer [cond]]
+            [clojure.core.match :refer [match]]
             [clojure.repl :as repl]
             [goedel.protocols :as p]
             [goedel.type :as t]
             [goedel.type-infer.state :as state :refer [*state* with-state]]
-            [goedel.type.refinement :as ref]))
+            [goedel.type.refinement :as ref]
+            [clojure.string :as str]))
 
 (def special-form?
   #{`let*
@@ -15,11 +17,16 @@
     `fn
     `fn*
     `if
-    '.})
+    '.
+    'new
+    `in-ns
+    'quote
+    'throw})
 
 (defn- invocation? [expr]
   (or (instance? clojure.lang.Cons expr)
-      (instance? clojure.lang.PersistentList expr)))
+      (instance? clojure.lang.PersistentList expr)
+      (instance? clojure.lang.LazySeq expr)))
 
 (defn- sf-invoke? [expr]
   (and (invocation? expr)
@@ -35,7 +42,8 @@
 
 (defn- class-symbol? [s]
   (and (simple-symbol? s)
-       (some #{\.} (name s))))
+       (or (some #{\.} (name s))
+           (class? (resolve s)))))
 
 ;;;
 
@@ -55,6 +63,12 @@
    (cond
      (= t1 t/top) t/top
      (= t1 t2) t2
+
+     (and (t/type-var? t1)
+          (t/type-var? t2))
+     (do (state/set-var! t1 t2)
+         (state/set-var! t2 t1)
+         t2)
 
      (t/type-var? t1) (let [t2′ (ref/unrefine t2)]
                         (state/set-var! t1 t2)
@@ -96,23 +110,69 @@
 
 (declare type-infer)
 
+(defn get-method [cls method arg-ts]
+  (let [m (name method)
+        arg-clss (into-array Class (map p/as-java-class arg-ts))]
+    (try
+      (.getMethod cls m arg-clss)
+      (catch NoSuchMethodException _e
+        (or (->> cls
+                 .getMethods
+                 (filter
+                  (fn [candidate-method]
+                    (and (= (.getName candidate-method) m)
+                         (every? true?
+                                 (map #(.isAssignableFrom %1 %2)
+                                      (.getParameterTypes candidate-method)
+                                      arg-clss)))))
+                 first)
+            (throw (NoSuchMethodException.
+                    (str (.getName cls) "." (name method)
+                         "("
+                         (str/join ", " (map #(.getName %) arg-clss))
+                         ")"))))))))
+
 (defn ti-method-invoke [obj m args]
   (let [obj-t (type-infer obj)
         arg-ts (doall (map type-infer args))]
+    (println "inferring!" m)
+    (println "arg types:" arg-ts)
     (letfn
         [(go
            [obj-t m arg-ts]
-           (if-let [existentials (->> arg-ts
-                                      (cons obj-t)
-                                      (filter t/existential?)
-                                      seq)]
+           (if-let [existentials
+                    (->> arg-ts
+                         (cons obj-t)
+                         (mapcat
+                          (fn [t]
+                            (cond
+                              (t/existential? t) [t]
+                              (t/dependent? t) (do
+                                                 (println "arg type depends on"
+                                                          (::t/dependent-args t))
+                                                (::t/dependent-args t)))))
+                         seq)]
              (t/dependent
               existentials
               (fn [existential-type-map]
+                (println "instantiating!" m)
                 (let [obj-t* (if (t/existential? obj-t)
-                               (get existential-type-map obj)
+                               (state/resolve-var existential-type-map obj-t)
                                obj-t)
-                      arg-ts* (replace existential-type-map arg-ts)]
+                      arg-ts* (doall (for [t arg-ts]
+                                (cond
+                                  (t/existential? t)
+                                  (do
+                                    (println "looking for existential" t "in"
+                                             (keys existential-type-map))
+                                    (println "x is" (get existential-type-map 'x)
+                                             (state/resolve-var existential-type-map 'x))
+                                    (doto (state/resolve-var existential-type-map t)
+                                      (println "found")))
+                                  (t/dependent? t)
+                                  (instantiate-dependent t existential-type-map)
+                                  :else t)) )
+                      _ (println arg-ts*)]
                   ;; this'll be fun
                   ;; hope it halts!
                   (go obj-t* m arg-ts*))))
@@ -120,9 +180,7 @@
                (cond
                  (class? obj-t)
                  (-> obj-t
-                     (.getMethod
-                      (name m)
-                      (into-array Class (map p/as-java-class arg-ts)))
+                     (get-method m arg-ts)
                      .getReturnType
                      t/class->type)
                  (class-symbol? obj-t)
@@ -159,10 +217,14 @@
 
 (defmethod ti-special-form `fn [[_ & args]]
   ;; TODO handle multiple arities
-  (let [[[vars & body]] (if ((some-fn list?
-                                      #(instance? clojure.lang.Cons %))
-                             (first args))
+  (let [[[vars & body]] (cond
+                          ((some-fn list?
+                                    #(instance? clojure.lang.Cons %))
+                           (first args))
                           args
+                          (symbol? (first args))
+                          (rest args)
+                          :else
                           [args])]
     (let [arg-vars (doall
                     (map (fn [v]
@@ -175,6 +237,7 @@
       (dorun (map #(state/update! ::state/vars dissoc %) arg-vars))
       (t/universalize
        (t/-> (t/types* arg-tys) res)))))
+
 (defmethod ti-special-form `fn* [[_ & args]]
   (ti-special-form (cons `fn args)))
 
@@ -183,16 +246,43 @@
         else-t (type-infer else)]
     (∧unify then-t else-t)))
 
-(defmethod ti-special-form `. [[_ obj [m & args]]]
-  (ti-method-invoke obj m args))
+(defmethod ti-special-form `. [[_ obj & args]]
+  (let [[m args] (cond
+                   (seq? (first args))
+                   [(ffirst args) (-> args first rest)]
+                   (symbol? (first args))
+                   [(first args) (rest args)])]
+    (ti-method-invoke obj m args)))
+
+(defmethod ti-special-form 'new [[_ cls & args]]
+  (let [cls-t (type-infer cls)
+        arg-ts (doall (map type-infer args))]
+    ;; TODO unify arg-ts with constructor-ts
+    cls-t))
+
+(defmethod ti-special-form `in-ns [[_ [_quote ns-name-sym]]]
+  (state/assoc! ::state/ns (create-ns ns-name-sym))
+  t/namespace)
+
+(defmethod ti-special-form 'quote [[_ body]]
+  (condp #(%1 %2) body
+    symbol? (ref/exact t/symbol body)))
+
+(defmethod ti-special-form 'throw [[_ ex-t]]
+  ;; TODO
+  t/bot
+  )
 
 ;;;
 
 (defn instantiate-dependent [{::t/keys [dependent-args dependent-fn]} vs]
   (dependent-fn
    (into {}
-         (map (fn [[k v]] [(t/universal->existential k) v]))
-         (select-keys vs dependent-args))))
+         (map (fn [[k v]] [(if (some #{k} dependent-args)
+                             (t/universal->existential k)
+                             k)
+                           v]))
+         vs)))
 
 (defn subs-universals [t]
   (t/prewalk
@@ -232,19 +322,33 @@
         t (reduce ∧unify val-types)]
     (t/vector-of t)))
 
+(defn ti-map [expr]
+  ;; TODO
+  (t/map-of t/top t/top))
+
+(defn ti-local-var-symbol [expr]
+  (or (state/lookup-var expr)
+      (when (ns-resolve (the-ns 'clojure.core)
+                        expr)
+        (ti-qualified-symbol (symbol "clojure.core" (name expr))))
+      (throw (ex-info "Local var not found" {:var expr}))))
+
 (defn type-infer [expr]
-  (with-state
-    (condp #(%1 %2) expr
-      integer? (ref/exact t/integer expr)
-      string? (ref/exact t/string expr)
-      boolean? (ref/exact t/boolean expr)
-      float? (ref/exact t/float expr)
-      keyword? (ref/exact t/keyword expr)
-      vector? (ti-vector expr)
-      local-var-symbol? (or (state/lookup-var expr)
-                            (throw (ex-info "Local var not found" {:var expr})))
-      class-symbol? (type-infer (resolve expr))
-      qualified-symbol? (ti-qualified-symbol expr)
-      sf-invoke? (ti-special-form expr)
-      function-call? (ti-function-call expr)
-      class? (t/class expr))))
+  (println "inferring" expr)
+  (let [expr (macroexpand expr)]
+    (with-state
+      (condp #(%1 %2) expr
+        integer? (ref/exact t/integer expr)
+        string? (ref/exact t/string expr)
+        boolean? (ref/exact t/boolean expr)
+        float? (ref/exact t/float expr)
+        keyword? (ref/exact t/keyword expr)
+        vector? (ti-vector expr)
+        map? (ti-map expr)
+        class-symbol? (type-infer (resolve expr))
+        local-var-symbol? (ti-local-var-symbol expr)
+        qualified-symbol? (ti-qualified-symbol expr)
+        sf-invoke? (ti-special-form expr)
+        function-call? (ti-function-call expr)
+        class? (t/class expr)
+        nil? t/bot))))

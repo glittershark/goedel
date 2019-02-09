@@ -147,6 +147,7 @@
     (are-types
      `(inc 1) t/integer
      `(inc 1.0) t/float
+     `((fn [x#] (inc (inc x#))) 1) t/integer
      `identity (t/∀ [x] (t/→ (t/tuple x) x)))
 
     (checking "eta-abstracted" 10 [eta-times gen/pos-int]
@@ -164,4 +165,6 @@
 
   (sut/type-infer '(do (def one 1)
                        one))
+
+  (sut/type-infer `((fn [~'x] (inc (inc ~'x))) 1))
   )

@@ -40,3 +40,14 @@
       dec
       (t/existential )))
 
+(defn resolve-var
+  ([v] (resolve-var (::vars @*state*) v))
+  ([vs v]
+   (loop [curr v
+          seen #{v}]
+     (if-let [next (get vs curr)]
+       (cond
+         (seen next) (throw (ex-info "Loop in type vars" {:seen seen}))
+         (t/type-var? next) (recur next (conj seen next))
+         :else next)
+       curr))))
